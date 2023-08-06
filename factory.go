@@ -11,7 +11,7 @@ import (
 
 const (
 	typeStr                 = "elasticapm"
-	defaultHTTPEndpoint     = "localhost:8200"
+	defaultHTTPEndpoint     = "0.0.0.0:8200"
 	defaultEventsURLPath    = "/intake/v2/events"
 	defaultRUMEventsURLPath = "/intake/v2/rum/events"
 )
@@ -30,7 +30,7 @@ func createDefaultConfig() component.Config {
 			Endpoint: defaultHTTPEndpoint,
 		},
 		EventsURLPath:    defaultEventsURLPath,
-		RUMEventsUrlPath: defaultEventsURLPath,
+		RUMEventsUrlPath: defaultRUMEventsURLPath,
 	}
 }
 
