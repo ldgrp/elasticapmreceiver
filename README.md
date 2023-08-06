@@ -7,6 +7,8 @@ OpenTelemetry spans. The spans can then be exported to any supported backend.
 
 Metrics are currently **not supported**.
 
+![Elastic RUM JS Agent to OpenTelemetry Collector to Jaeger](./docs/jaeger_sample.png)
+
 **This is a proof of concept. It is currently not intended for production use.**
 
 ## Getting Started
