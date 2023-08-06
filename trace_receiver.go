@@ -2,7 +2,6 @@ package elasticapmreceiver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -13,8 +12,15 @@ import (
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/obsreport"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/elastic/apm-data/input/elasticapm"
+	"github.com/elastic/apm-data/model/modelpb"
+	"github.com/ldgrp/elasticapmreceiver/translator"
 )
 
 type elasticapmReceiver struct {
@@ -99,45 +105,119 @@ func (r *elasticapmReceiver) registerTraceConsumer(nextConsumer consumer.Traces)
 		return component.ErrNilNextConsumer
 	}
 
+	r.nextConsumer = nextConsumer
+
 	if r.httpMux != nil {
-		r.httpMux.HandleFunc(r.cfg.EventsURLPath, r.handleEvents)
-		r.httpMux.HandleFunc(r.cfg.RUMEventsUrlPath, r.handleEvents)
+		r.httpMux.HandleFunc(r.cfg.EventsURLPath, wrapper(r.handleEvents))
+		r.httpMux.HandleFunc(r.cfg.RUMEventsUrlPath, wrapper(r.handleRUMEvents))
 	}
 
 	return nil
 }
 
-func (r *elasticapmReceiver) handleEvents(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Only POST requests are supported")
-		return
-	}
+func wrapper(f http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "Only POST requests are supported")
+			return
+		}
 
-	switch req.Header.Get("Content-Type") {
-	// Only parse ndjson
-	case "application/x-ndjson":
-		handleTraces(w, req, r.traceReceiver)
-	default:
-		writeError(w, http.StatusUnsupportedMediaType, "Only application/ndjson is supported")
-		return
+		switch req.Header.Get("Content-Type") {
+		// Only parse ndjson
+		case "application/x-ndjson":
+			f(w, req)
+		default:
+			writeError(w, http.StatusUnsupportedMediaType, "Only application/ndjson is supported")
+			return
+		}
 	}
 }
 
-func handleTraces(w http.ResponseWriter, req *http.Request, tracesReceiver *obsreport.Receiver) {
-	d := json.NewDecoder(req.Body)
-	for {
-		var v interface{}
-		err := d.Decode(&v)
-		if err != nil {
-			if err != io.EOF {
-				writeError(w, http.StatusBadRequest, "Error decoding request body")
-				return
-			}
-			break
-		}
-		fmt.Println(v)
+func (r *elasticapmReceiver) handleEvents(w http.ResponseWriter, req *http.Request) {
+	traceData, _ := r.handleTraces(w, req, &modelpb.APMEvent{}, r.traceReceiver)
+	if traceData != nil {
+		r.nextConsumer.ConsumeTraces(req.Context(), *traceData)
 	}
-	w.WriteHeader(http.StatusAccepted)
+}
+
+func (r *elasticapmReceiver) handleRUMEvents(w http.ResponseWriter, req *http.Request) {
+	baseEvent := &modelpb.APMEvent{
+		Timestamp: timestamppb.Now(),
+	}
+	traceData, _ := r.handleTraces(w, req, baseEvent, r.traceReceiver)
+	if traceData != nil {
+		r.nextConsumer.ConsumeTraces(req.Context(), *traceData)
+	}
+}
+
+// Process a batch of events, returning the events and any error.
+// The baseEvent is extended by the metadata in the batch and used as the base event for all events in the batch.
+func (r *elasticapmReceiver) processBatch(reader io.Reader, baseEvent *modelpb.APMEvent) ([]*modelpb.APMEvent, error) {
+	var events = []*modelpb.APMEvent{}
+	processor := elasticapm.NewProcessor(elasticapm.Config{
+		MaxEventSize: r.cfg.MaxEventSize,
+		Semaphore:    semaphore.NewWeighted(1),
+		Logger:       r.settings.Logger,
+	})
+
+	batchProcessor := modelpb.ProcessBatchFunc(func(ctx context.Context, batch *modelpb.Batch) error {
+		events = append(events, (*batch)...)
+		return nil
+	})
+
+	result := elasticapm.Result{}
+
+	err := processor.HandleStream(
+		context.Background(),
+		false,
+		baseEvent,
+		reader,
+		r.cfg.BatchSize,
+		batchProcessor,
+		&result,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return events, nil
+}
+
+func (r *elasticapmReceiver) handleTraces(w http.ResponseWriter, req *http.Request, baseEvent *modelpb.APMEvent, tracesReceiver *obsreport.Receiver) (*ptrace.Traces, error) {
+	events, err := r.processBatch(req.Body, baseEvent)
+
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Unable to decode events. Do you have valid ndjson?")
+		return nil, err
+	}
+
+	traceData := ptrace.NewTraces()
+	resourceSpans := traceData.ResourceSpans().AppendEmpty()
+	scopeSpans := resourceSpans.ScopeSpans().AppendEmpty()
+	spans := scopeSpans.Spans()
+	resource := resourceSpans.Resource()
+
+	translator.ConvertMetadata(baseEvent, resource)
+
+	for _, event := range events {
+		switch event.Type() {
+		case modelpb.TransactionEventType:
+			translator.ConvertTransaction(event, spans.AppendEmpty())
+		case modelpb.SpanEventType:
+			translator.ConvertSpan(event, spans.AppendEmpty())
+		case modelpb.ErrorEventType:
+			fmt.Println("Ignoring error")
+		case modelpb.MetricEventType:
+			fmt.Println("Ignoring metricset")
+		case modelpb.LogEventType:
+			fmt.Println("Ignoring log")
+		default:
+			fmt.Println("Unknown event type")
+		}
+	}
+
+	return &traceData, nil
 }
 
 func writeError(w http.ResponseWriter, statusCode int, message string) {

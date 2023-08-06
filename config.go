@@ -8,6 +8,8 @@ type Config struct {
 	*confighttp.HTTPServerSettings `mapstructure:",squash"`
 	EventsURLPath                  string `mapstructure:"events_url_path"`
 	RUMEventsUrlPath               string `mapstructure:"rum_events_url_path"`
+	MaxEventSize                   int    `mapstructure:"max_event_size_bytes"`
+	BatchSize                      int    `mapstructure:"batch_size"`
 }
 
 func (cfg *Config) Validate() error {

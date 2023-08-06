@@ -10,10 +10,12 @@ import (
 )
 
 const (
-	typeStr                 = "elasticapm"
-	defaultHTTPEndpoint     = "0.0.0.0:8200"
-	defaultEventsURLPath    = "/intake/v2/events"
-	defaultRUMEventsURLPath = "/intake/v2/rum/events"
+	typeStr                  = "elasticapm"
+	defaultHTTPEndpoint      = "0.0.0.0:8200"
+	defaultEventsURLPath     = "/intake/v2/events"
+	defaultRUMEventsURLPath  = "/intake/v2/rum/events"
+	defaultMaxEventSizeBytes = 300 * 1024
+	defaultBatchSize         = 10
 )
 
 func NewFactory() receiver.Factory {
@@ -31,6 +33,8 @@ func createDefaultConfig() component.Config {
 		},
 		EventsURLPath:    defaultEventsURLPath,
 		RUMEventsUrlPath: defaultRUMEventsURLPath,
+		MaxEventSize:     defaultMaxEventSizeBytes,
+		BatchSize:        defaultBatchSize,
 	}
 }
 
