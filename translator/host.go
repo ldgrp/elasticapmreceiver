@@ -18,5 +18,12 @@ func parseHost(host *modelpb.Host, attrs pcommon.Map) {
 	PutOptionalStr(attrs, conventions.AttributeHostArch, &host.Architecture)
 	PutOptionalStr(attrs, conventions.AttributeHostType, &host.Type)
 
-	// TODO: host.IP
+	for _, ip := range host.Ip {
+		if &ip.V4 != nil {
+			attrs.PutStr("host.ip.v4", parseIPV4(ip.V4))
+		}
+		if &ip.V6 != nil && len(ip.V6) == 16 {
+			attrs.PutStr("host.ip.v6", parseIPV6(ip.V6))
+		}
+	}
 }
