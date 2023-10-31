@@ -11,9 +11,9 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/consumer"
-	"go.opentelemetry.io/collector/obsreport"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/receiver"
+	"go.opentelemetry.io/collector/receiver/receiverhelper"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -30,7 +30,7 @@ type elasticapmReceiver struct {
 	shutdownWG sync.WaitGroup
 
 	nextConsumer  consumer.Traces
-	traceReceiver *obsreport.Receiver
+	traceReceiver *receiverhelper.ObsReport
 	settings      receiver.CreateSettings
 }
 
@@ -42,7 +42,7 @@ func newElasticAPMReceiver(cfg *Config, settings receiver.CreateSettings) (*elas
 	}
 
 	var err error
-	r.traceReceiver, err = obsreport.NewReceiver(obsreport.ReceiverSettings{
+	r.traceReceiver, err = receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{
 		ReceiverID:             settings.ID,
 		Transport:              "http",
 		ReceiverCreateSettings: settings,
@@ -184,7 +184,7 @@ func (r *elasticapmReceiver) processBatch(reader io.Reader, baseEvent *modelpb.A
 	return events, nil
 }
 
-func (r *elasticapmReceiver) handleTraces(w http.ResponseWriter, req *http.Request, baseEvent *modelpb.APMEvent, tracesReceiver *obsreport.Receiver) (*ptrace.Traces, error) {
+func (r *elasticapmReceiver) handleTraces(w http.ResponseWriter, req *http.Request, baseEvent *modelpb.APMEvent, tracesReceiver *receiverhelper.ObsReport) (*ptrace.Traces, error) {
 	events, err := r.processBatch(req.Body, baseEvent)
 
 	if err != nil {
